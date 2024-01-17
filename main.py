@@ -21,7 +21,8 @@ pass
 
 def init_simulation():
     u = np.zeros((3, dimx + offset * 2 + 2, dimy + offset * 2 + 2), dtype=np.float64)
-    u[0, dimx // 2, dimy // 2] = 1000
+    # u[0, dimx // 2, dimy // 2] = 1000
+    u[0, dimx // 2, :] = 1000
     # u[0, 9, 9] = 10
     # The three dimensional simulation grid u[time, dimx, dimy]
 
@@ -31,7 +32,9 @@ def init_simulation():
     # wave propagation velocities of the entire simulation domain
 
     alpha[:, :] = ((c * t) / h) ** 2  # will be set to a constant value of tau
-    alpha[2*dimx // 3:2*dimx // 3 + 10, 25:75] = 0
+    alpha[2 * dimx // 3:2 * dimx // 3 + 10, 0:30] = 0
+    alpha[2 * dimx // 3:2 * dimx // 3 + 10, 30:40] = 0
+    alpha[2 * dimx // 3:2 * dimx // 3 + 10, 60:70] = 0
 
     return u, alpha
 
