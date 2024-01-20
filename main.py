@@ -9,10 +9,10 @@ import matplotlib as mpl
 
 h = 1  # spatial step width
 t = 1  # time step width
-dimx = 500  # width of the simulation domain
-dimy = 500  # height of the simulation domain
-deriv_window = 1
-widow_size = (500, 500)
+dimx = 1000  # width of the simulation domain
+dimy = 1000  # height of the simulation domain
+deriv_window = 8
+widow_size = (1000, 1000)
 deriv_coffs_space = (np.array(savgol_coeffs(deriv_window * 2 + 1, deriv_window * 2, deriv=2, use='dot'),
                               dtype=np.float64))[deriv_window:]
 deriv_coffs_time = np.array(savgol_coeffs(3, 2, deriv=2, use='dot'), dtype=np.float64)
@@ -140,10 +140,17 @@ def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
             y_plus = True
             y_minus = True
 
+            x_plus_y_plus = True
+            x_plus_y_minus = True
+            x_minus_y_plus = True
+            x_minus_y_minus = True
+
             temp = 0
             i = 0
 
             while i < deriv_coffs_space.shape[0]:
+                # Pion - poziom #
+
                 if u.shape[1] - 1 > x + i > 0 and x_plus:
                     if alpha[x + i, y] == 0:
                         x_plus = False
@@ -167,6 +174,32 @@ def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
                         y_minus = False
                     else:
                         temp += u[1, x, y - i] * deriv_coffs_space[i]
+
+                # Ukosy #
+
+                if u.shape[1] - 1 > x + i > 0 and u.shape[1] - 1 > y + i > 0 and x_plus_y_plus:
+                    if alpha[x + i, y + i] == 0:
+                        x_plus = False
+                    else:
+                        temp += u[1, x + i, y + i] * deriv_coffs_space[i]
+
+                if u.shape[1] - 1 > x - i > 0 != i and u.shape[1] - 1 > y - i > 0 and x_minus_y_minus:
+                    if alpha[x - i, y - i] == 0:
+                        x_plus = False
+                    else:
+                        temp += u[1, x - i, y - i] * deriv_coffs_space[i]
+
+                if u.shape[1] - 1 > x - i > 0 and u.shape[1] - 1 > y + i > 0 and x_minus_y_plus:
+                    if alpha[x - i, y + i] == 0:
+                        x_plus = False
+                    else:
+                        temp += u[1, x - i, y + i] * deriv_coffs_space[i]
+
+                if u.shape[1] - 1 > x + i > 0 != i and u.shape[1] - 1 > y - i > 0 and x_plus_y_minus:
+                    if alpha[x + i, y - i] == 0:
+                        x_plus = False
+                    else:
+                        temp += u[1, x + i, y - i] * deriv_coffs_space[i]
 
                 i += 1
 
@@ -357,11 +390,9 @@ def main():
 
         u = u.copy_to_host()
 
-        # print_frame[block_grid_2, thread_block](cuda.to_device(u), pixeldata, cmap, max_abs_value_from_array(u),
-        #                                         debug)
-
         print_frame[block_grid_2, thread_block](cuda.to_device(u), pixeldata, cmap_mem,
                                                 max(np.abs(u.max()), np.abs(u.min())))
+
         # print_frame[block_grid_2, thread_block](u, pixeldata, cmap, 1000)
 
         pixeldata = pixeldata.copy_to_host()
