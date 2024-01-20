@@ -9,20 +9,22 @@ import matplotlib as mpl
 
 h = 1  # spatial step width
 t = 1  # time step width
-dimx = 1001  # width of the simulation domain
-dimy = 1001  # height of the simulation domain
-cellsize = 0.5  # display size of a cell in pixel
-offset = 8
-deriv_coffs_space = (np.array(savgol_coeffs(offset * 2 + 1, offset * 2, deriv=2, use='dot'), dtype=np.float64))[offset:]
+dimx = 500  # width of the simulation domain
+dimy = 500  # height of the simulation domain
+deriv_window = 1
+widow_size = (500, 500)
+deriv_coffs_space = (np.array(savgol_coeffs(deriv_window * 2 + 1, deriv_window * 2, deriv=2, use='dot'),
+                              dtype=np.float64))[deriv_window:]
 deriv_coffs_time = np.array(savgol_coeffs(3, 2, deriv=2, use='dot'), dtype=np.float64)
 cmap = np.array([np.array(mpl.cm.inferno(i)[:3]) * 256 for i in np.linspace(0, 1, 256)], dtype=np.uint8)
 pass
-thread_block = (8, 4)
+thread_block = (32, 32)
 
 
 def init_simulation():
-    u = np.zeros((3, dimx + offset * 2 + 2, dimy + offset * 2 + 2), dtype=np.float64)
+    u = np.zeros((3, dimx + 2, dimy + 2), dtype=np.float64)
     u[0, u.shape[1] // 2, u.shape[2] // 2] = 1000
+    # u[0, 1:4, 1:4] = 100
     # u[0, dimx // 2, :] = 1000
     # u[0, 9, 9] = 10
     # The three dimensional simulation grid u[time, dimx, dimy]
@@ -33,9 +35,6 @@ def init_simulation():
     # wave propagation velocities of the entire simulation domain
 
     alpha[:, :] = ((c * t) / h) ** 2  # will be set to a constant value of tau
-    # alpha[2 * dimx // 3:2 * dimx // 3 + 10, 0:30] = 0
-    # alpha[2 * dimx // 3:2 * dimx // 3 + 10, 30:40] = 0
-    # alpha[2 * dimx // 3:2 * dimx // 3 + 10, 60:70] = 0
 
     return u, alpha
 
@@ -64,9 +63,9 @@ def update(u, result, alpha, deriv_coffs):
             # result[0, x, y] = alpha_loc[idx, idy]
             # alpha_loc[idx, idy] = x + y
 
-        i, j = -offset - 4, -offset - 2
-        while i + idx < 4 + offset:
-            while j + idy < 2 + offset:
+        i, j = -deriv_window - 4, -deriv_window - 2
+        while i + idx < 4 + deriv_window:
+            while j + idy < 2 + deriv_window:
                 if 0 <= i + x < u.shape[1] and 0 <= j + y < u.shape[2]:
                     k = 1
                     while k < u.shape[0]:
@@ -79,22 +78,22 @@ def update(u, result, alpha, deriv_coffs):
 
         cuda.syncthreads()
         # u_loc[0, idx, idy] = alpha_loc[idx, idx]
-        result[0, x, y] = u_loc[0, idx + offset, idy + offset]
+        result[0, x, y] = u_loc[0, idx + deriv_window, idy + deriv_window]
 
         """With multiplying after second loop throws: {CudaAPIError}[700] Call to cuMemcpyDtoH results in 
         UNKNOWN_CUDA_ERROR"""
 
         if 0 < x < u.shape[1] - 1 and 0 < y < u.shape[2] - 1:
-            u_loc[0, idx + offset, idy + offset] = alpha_loc[idx, idx]
+            u_loc[0, idx + deriv_window, idy + deriv_window] = alpha_loc[idx, idx]
             # result[0, x, y] = u_loc[0, idx + offset, idy + offset]
             # u[0, x, y] = alpha_loc[idx, idx]
             # cuda.syncwarp()
 
             temp = 0
             i = 0
-            while i < offset * 2:
-                if 0 < i + x - offset < u.shape[1] - 1 and 0 <= i + idx - offset < 8:
-                    temp += (u_loc[int(u.shape[0] // 2), i + idx - offset, idy] * deriv_coffs_loc[i])
+            while i < deriv_window * 2:
+                if 0 < i + x - deriv_window < u.shape[1] - 1 and 0 <= i + idx - deriv_window < 8:
+                    temp += (u_loc[int(u.shape[0] // 2), i + idx - deriv_window, idy] * deriv_coffs_loc[i])
                     pass
                 i += 1
 
@@ -127,7 +126,7 @@ def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
     idx = cuda.threadIdx.x
     idy = cuda.threadIdx.y
 
-    u_shared = cuda.shared.array(thread_block, dtype=np.float64)
+    # u_shared = cuda.shared.array(thread_block, dtype=np.float64)
 
     if x < u.shape[1] and y < u.shape[2]:
 
@@ -170,10 +169,6 @@ def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
                         temp += u[1, x, y - i] * deriv_coffs_space[i]
 
                 i += 1
-                # x_plus = True
-                # x_minus = True
-                # y_plus = True
-                # y_minus = True
 
             temp *= (alpha[x, y] ** 2)
 
@@ -184,24 +179,82 @@ def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
 
             if (10 ** (-310)) >= temp / deriv_coffs_time[0] >= -(10 ** (-310)):
                 u[0, x, y] = 0
-                u_shared[idx, idy] = 0
+                # u_shared[idx, idy] = 0
             else:
                 u[0, x, y] = (temp / deriv_coffs_time[0])
-                u_shared[idx, idy] = (temp / deriv_coffs_time[0])
+                # u_shared[idx, idy] = (temp / deriv_coffs_time[0])
 
-        # elif (x == 0 or x == u.shape[1] - 1) ^ (y == 0 or y == u.shape[2] - 1):
-        #     pass
+        elif (x == 0 or x == u.shape[1] - 1) ^ (y == 0 or y == u.shape[2] - 1):
+            # k = alpha[x, y] * t / h
+            # k = (k - 1) / (k + 1)
+            # if x == 0:
+            #     u[0, x, y] = u[1, x + 1, y] + k * (u[0, x + 1, y] - u[1, x, y])
+            # elif x == u.shape[1] - 1:
+            #     u[0, x, y] = u[1, x - 1, y] + k * (u[0, x - 1, y] - u[1, x, y])
+            # elif y == 0:
+            #     u[0, x, y] = u[1, x, y + 1] + k * (u[0, x, y + 1] - u[1, x, y])
+            # elif y == u.shape[1] - 1:
+            #     u[0, x, y] = u[1, x, y - 1] + k * (u[0, x, y - 1] - u[1, x, y])
+            pass
 
 
-@cuda.jit('void(float64[:,:,:], uint8[:,:,:], uint8[:,:], float64, float64[:,:])')
-def print_frame(u, pixeldata, cmap, max_val_data, debug):
+def max_abs_value_from_array(arr):
+    sector_size = (2, 2)
+
+    a_mem = cuda.device_array((dimx + 2, dimy + 2), dtype=np.float64)
+    b_mem = cuda.device_array((int(np.ceil((dimx + 2) / sector_size[0])),
+                               int(np.ceil((dimy + 2) / sector_size[1]))),
+                              dtype=np.float64)
+
+    @cuda.jit()
+    def copy_array(u, a):
+        x, y = cuda.grid(2)
+
+        if x < u.shape[1] and y < u.shape[2]:
+            a[x, y] = u[0, x, y]
+
+        cuda.syncthreads()
+
+    @cuda.jit('void(float64[:,:], float64[:,:])')
+    def max_val_from_arr_gpu(a, b):
+        x, y = cuda.grid(2)
+
+        if x < b.shape[0] and y < b.shape[1]:
+            temp = 0
+
+            for i in range(2):
+                for j in range(2):
+                    if x * 2 + i < a.shape[0] and y * 2 + j < a.shape[1]:
+                        temp1 = a[x * 2 + i, y * 2 + j]
+                        if temp < temp1:
+                            temp = temp1
+
+            b[x, y] = temp
+
+        cuda.syncthreads()
+
+    copy_array[(int(np.ceil((dimx + 2) / 32)), int(np.ceil((dimy + 2) / 32))), (32, 32)](arr, a_mem)
+
+    block_grid = (int(np.ceil((dimx + 2) / sector_size[0] / 32)), int(np.ceil((dimy + 2) / sector_size[1] / 32)))
+
+    for k in range(int(np.ceil(max(np.log2(arr.shape[1]) / np.log2(sector_size[0]),
+                                   np.log2(arr.shape[2]) / np.log2(sector_size[1]))))):
+        max_val_from_arr_gpu[block_grid, (32, 32)](a_mem, b_mem)
+        a_mem, b_mem = b_mem, a_mem
+        block_grid = (int(np.ceil(block_grid[0] / sector_size[0])), int(np.ceil(block_grid[1] / sector_size[1])))
+
+    return (a_mem.copy_to_host())[0, 0]
+
+
+@cuda.jit('void(float64[:,:,:], uint8[:,:,:], uint8[:,:], float64)')
+def print_frame(u, pixeldata, cmap, max_val_data):
     x, y = cuda.grid(2)
 
     if x < pixeldata.shape[0] and y < pixeldata.shape[1]:
-        x_low = x * u.shape[1] / pixeldata.shape[0]
-        x_high = (x + 1) * u.shape[1] / pixeldata.shape[0]
-        y_low = y * u.shape[2] / pixeldata.shape[1]
-        y_high = (y + 1) * u.shape[2] / pixeldata.shape[1]
+        x_low = x * (u.shape[1] - 2) / pixeldata.shape[0]
+        x_high = (x + 1) * (u.shape[1] - 2) / pixeldata.shape[0]
+        y_low = y * (u.shape[2] - 2) / pixeldata.shape[1]
+        y_high = (y + 1) * (u.shape[2] - 2) / pixeldata.shape[1]
 
         pixel_value = 0
 
@@ -223,18 +276,24 @@ def print_frame(u, pixeldata, cmap, max_val_data, debug):
                 else:
                     jy = y_high - iy
 
-                    pixel_value += jx * jy * u[0, int(ix // 1), int(iy // 1)]
+                pixel_value += jx * jy * u[0, int(ix // 1) + 1, int(iy // 1) + 1]
 
                 iy += jy
             ix += jx
 
-        pixel_value /= (u.shape[1] / pixeldata.shape[0]) * (u.shape[2] / pixeldata.shape[1])
-        debug[x, y] = pixel_value
+        pixel_value /= ((u.shape[1] - 2) / pixeldata.shape[0]) * ((u.shape[2] - 2) / pixeldata.shape[1])
 
         i = 0
+        c = (int(pixel_value / max_val_data * 127)) + 127
+
+        if c < 0:
+            c = 0
+        elif c > 255:
+            c = 255
+
         while i < 3:
             if max_val_data != 0:
-                pixeldata[x, y, i] = cmap[int(pixel_value / max_val_data * 127) + 127, i]
+                pixeldata[x, y, i] = cmap[c, i]
 
             else:
                 pixeldata[x, y, i] = cmap[127, i]
@@ -261,16 +320,14 @@ def use_color_map(u, scale, pixeldata, cmap):
             i += 1
 
 
-def place_raindrops(u):
-    if (random.random() < 0.1) and True:
-        x = random.randrange(5, dimx - 5)
-        y = random.randrange(5, dimy - 5)
-        u[0, x - 2:x + 2, y - 2:y + 2] = 255
+def place_raindrops(u, prob):
+    if (random.random() < prob) and True:
+        u[0, random.randrange(1, dimx + 1), random.randrange(1, dimx + 1)] = np.random.randint(10, 10000)
 
 
 def main():
     pygame.init()
-    display = pygame.display.set_mode((dimx * cellsize, dimy * cellsize))
+    display = pygame.display.set_mode((widow_size))
     pygame.display.set_caption("Solving the 2d Wave Equation")
 
     u, alpha = init_simulation()
@@ -278,20 +335,19 @@ def main():
     cmap_mem = cuda.to_device(cmap)
     deriv_coffs_spc_mem = cuda.to_device(deriv_coffs_space)
     deriv_coffs_tim_mem = cuda.to_device(deriv_coffs_time)
-    pixeldata = np.zeros((u.shape[1] - 2, u.shape[2] - 2, 3), dtype=np.uint8)
 
     while True:
+        # place_raindrops(u, 0.01)
+
         u = np.append(np.zeros((1, u.shape[1], u.shape[2]), dtype=np.float64), u[:-1], axis=0)
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
                 return
 
-        # place_raindrops(u)
-        debug = cuda.device_array((pixeldata.shape[0], pixeldata.shape[1]), dtype=np.float64)
-
         u = cuda.to_device(u)
-        pixeldata = cuda.to_device(pixeldata)
+
+        pixeldata = cuda.device_array((*widow_size, 3), dtype=np.uint8)
 
         block_grid_1 = (int(np.ceil(u.shape[1] / thread_block[0])), int(np.ceil(u.shape[2] / thread_block[1])))
         block_grid_2 = (int(np.ceil(pixeldata.shape[0] / thread_block[0])),
@@ -301,19 +357,17 @@ def main():
 
         u = u.copy_to_host()
 
-        # print_frame[block_grid_2, thread_block](cuda.to_device(u), pixeldata, cmap,
-        #                                         max(np.abs(u.max()), np.abs(u.min())), debug)
+        # print_frame[block_grid_2, thread_block](cuda.to_device(u), pixeldata, cmap, max_abs_value_from_array(u),
+        #                                         debug)
 
-        use_color_map[block_grid_1, thread_block](cuda.to_device(u), max(np.abs(u.max()), np.abs(u.min())),
-                                                  pixeldata, cmap_mem)
+        print_frame[block_grid_2, thread_block](cuda.to_device(u), pixeldata, cmap_mem,
+                                                max(np.abs(u.max()), np.abs(u.min())))
+        # print_frame[block_grid_2, thread_block](u, pixeldata, cmap, 1000)
+
         pixeldata = pixeldata.copy_to_host()
 
-        # pixeldata[1:dimx, 1:dimy, 0] = np.clip(u[0, 1:dimx, 1:dimy] + 128, -255, 255)
-        # pixeldata[1:dimx, 1:dimy, 1] = np.clip(u[1, 1:dimx, 1:dimy] + 128, -255, 255)
-        # pixeldata[1:dimx, 1:dimy, 2] = np.clip(u[2, 1:dimx, 1:dimy] + 128, -255, 255)
-
         surf = pygame.surfarray.make_surface(pixeldata)
-        display.blit(pygame.transform.scale(surf, (dimx * cellsize, dimy * cellsize)), (0, 0))
+        display.blit(pygame.transform.scale(surf, widow_size), (0, 0))
         pygame.display.update()
 
 
