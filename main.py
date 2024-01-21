@@ -173,29 +173,27 @@ def init_simulation():
 #         #     pass
 
 
-@cuda.jit(f'void(float64[:,:,:], float64[:,:], float64[:,:], float64[:])')
-def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
+@cuda.jit(f'void(float64[:,:,:], float64[:,:,:], float64[:,:], float64[:,:], float64[:])')
+def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time):
     # zapisywać tylko jedną warstwę, tą do pochodnych x/y
     x, y = cuda.grid(2)
     # idx = cuda.threadIdx.x
     # idy = cuda.threadIdx.y
 
     # shape=(thread_block[0] + deriv_window * 2, thread_block[1] + deriv_window * 2)
-    # u_shared = cuda.shared.array(shape=(3, 8, 8), dtype=np.float64)
+    # u_shared = cuda.shared.array(shape=(28, 40), dtype=np.float64)
     # a_shared = cuda.shared.array(shape=(8, 8), dtype=np.float64)
 
     # deriv_coffs_space.shape
     # d_s_shared = cuda.shared.array(shape=(17, 17), dtype=np.float64)
     # d_t_shared = cuda.shared.array(shape=3, dtype=np.float64)
 
-    if x < u.shape[1] and y < u.shape[2]:
-        # for i in range(0, thread_block[0] + deriv_window * 2, 32):
-        #     for j in range(0, thread_block[1] + deriv_window * 2, 32):
-        #         if 0 <= x - deriv_window + i <= u.shape[1] and 0 <= y - deriv_window + j <= u.shape[2]:
-        #             u_shared[1, idx + i, idy + j] = u[0, x - deriv_window + i, y - deriv_window + j]
-        #             u_shared[2, idx + i, idy + j] = u[1, x - deriv_window + i, y - deriv_window + j]
-        #             a_shared[idx + i, idy + j] = alpha[x - deriv_window + i, y - deriv_window + j]
-        #
+    if x < u_in.shape[1] and y < u_in.shape[2]:
+        #     for i in range(0, thread_block[0] + deriv_window * 2, 32):
+        #         for j in range(0, thread_block[1] + deriv_window * 2, 32):
+        #             if 0 <= x - deriv_window + i <= u_in.shape[1] and 0 <= y - deriv_window + j <= u_in.shape[2]:
+        #                 u_shared[idx + i, idy + j] = u_in[0, x - deriv_window + i, y - deriv_window + j]
+
         # if idx < deriv_coffs_space.shape[0] and idy < deriv_coffs_space.shape[1]:
         #     d_s_shared[idx, idy] = deriv_coffs_space[idx, idy]
         #     if idx < deriv_coffs_time.shape[0] and idy == 0:
@@ -214,7 +212,7 @@ def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
         # $$$ Generacja następnej klatki $$$ #
         # $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ #
 
-        if 0 < x < u.shape[1] - 1 and 0 < y < u.shape[2] - 1:
+        if 0 < x < u_in.shape[1] - 1 and 0 < y < u_in.shape[2] - 1:
             # x_plus = True
             # x_minus = True
             # y_plus = True
@@ -284,37 +282,33 @@ def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
 
                 # Pochodne w 2d (3d)
                 for j in range(deriv_window + 1):
-                    if u.shape[1] - 1 > x + i > 0 and u.shape[2] - 1 > y + j > 0:
-                        temp += u[1, x + i, y + j] * deriv_coffs_space[i, j] * alpha[x + i, y + j]
+                    if u_in.shape[1] - 1 > x + i > 0 and u_in.shape[2] - 1 > y + j > 0:
+                        temp += u_in[0, x + i, y + j] * deriv_coffs_space[i, j] * alpha[x + i, y + j]
 
-                    if u.shape[1] - 1 > x + i > 0 and u.shape[2] - 1 > y - j > 0 < j and not (i == 0 and j == 0):
-                        temp += u[1, x + i, y - j] * deriv_coffs_space[i, j] * alpha[x + i, y - j]
+                    if u_in.shape[1] - 1 > x + i > 0 and u_in.shape[2] - 1 > y - j > 0 < j and not (i == 0 and j == 0):
+                        temp += u_in[0, x + i, y - j] * deriv_coffs_space[i, j] * alpha[x + i, y - j]
 
-                    if u.shape[1] - 1 > x - i > 0 < i and u.shape[2] - 1 > y + j > 0 and not (i == 0 and j == 0):
-                        temp += u[1, x - i, y + j] * deriv_coffs_space[i, j] * alpha[x - i, y + j]
+                    if u_in.shape[1] - 1 > x - i > 0 < i and u_in.shape[2] - 1 > y + j > 0 and not (i == 0 and j == 0):
+                        temp += u_in[0, x - i, y + j] * deriv_coffs_space[i, j] * alpha[x - i, y + j]
 
-                    if u.shape[1] - 1 > x - i > 0 < i and u.shape[2] - 1 > y - j > 0 < j and not (i == 0 and j == 0):
-                        temp += u[1, x - i, y - j] * deriv_coffs_space[i, j] * alpha[x - i, y - j]
+                    if u_in.shape[1] - 1 > x - i > 0 < i and u_in.shape[2] - 1 > y - j > 0 < j and not (
+                            i == 0 and j == 0):
+                        temp += u_in[0, x - i, y - j] * deriv_coffs_space[i, j] * alpha[x - i, y - j]
 
-            i = 1
-            while i < deriv_coffs_time.shape[0]:
-                temp -= u[i, x, y] * deriv_coffs_time[i]
-                i += 1
+            temp -= u_in[1, x, y] * deriv_coffs_time[2]
+            temp -= u_in[0, x, y] * deriv_coffs_time[1]
 
-            cuda.syncthreads()
+            # temp -= u_shared[idx + deriv_window, idy + deriv_window] * deriv_coffs_time[1]
 
-            # u[2, x, y] = u[1, x, y]
-            # u[1, x, y] = u[0, x, y]
+            u_out[1, x, y] = u_in[0, x, y]
 
-            if (10 ** (-310)) >= temp / deriv_coffs_time[1] >= -(10 ** (-310)):
-                u[0, x, y] = 0
+            if (10 ** (-310)) >= temp / deriv_coffs_time[0] >= -(10 ** (-310)):
+                u_out[0, x, y] = 0
                 # u_shared[idx, idy] = 0
             else:
 
-                u[0, x, y] = (temp / deriv_coffs_time[0])
+                u_out[0, x, y] = (temp / deriv_coffs_time[0])
                 # u_shared[idx, idy] = (temp / deriv_coffs_time[0])
-
-            cuda.syncthreads()
 
         # elif (x == 0 or x == u.shape[1] - 1) ^ (y == 0 or y == u.shape[2] - 1):
         #     # k = alpha[x, y] * t / h
@@ -458,28 +452,32 @@ def place_raindrops(u, prob):
 
 
 def backend(pipe, queue):
-    u, alpha = init_simulation()
+    u_old, alpha = init_simulation()
     alpha_mem = cuda.to_device(alpha)
     cmap_mem = cuda.to_device(cmap)
     deriv_coffs_spc_mem = cuda.to_device(deriv_coffs_space)
     deriv_coffs_tim_mem = cuda.to_device(deriv_coffs_time)
     pixeldata = cuda.device_array((*window_size, 3), dtype=np.uint8)
 
+    u_old = cuda.to_device(u_old)
 
     while True:
         if not queue.full():
-            u = np.append(np.zeros((1, u.shape[1], u.shape[2]), dtype=np.float64), u[:-1], axis=0)
-            u_mem = cuda.to_device(u)
+            u_new = cuda.device_array(u_old.shape, dtype=np.float64)
 
-            block_grid_1 = (int(np.ceil(u.shape[1] / thread_block[0])), int(np.ceil(u.shape[2] / thread_block[1])))
+            block_grid_1 = (int(np.ceil(u_old.shape[1] / thread_block[0])),
+                            int(np.ceil(u_old.shape[2] / thread_block[1])))
             block_grid_2 = (int(np.ceil(pixeldata.shape[0] / thread_block[0])),
                             int(np.ceil(pixeldata.shape[1] / thread_block[1])))
 
-            generate_new_frame[block_grid_1, thread_block](u_mem, alpha_mem, deriv_coffs_spc_mem, deriv_coffs_tim_mem)
+            generate_new_frame[block_grid_1, thread_block](u_old, u_new, alpha_mem, deriv_coffs_spc_mem,
+                                                           deriv_coffs_tim_mem)
 
-            u = u_mem.copy_to_host()
+            u = u_new.copy_to_host()
 
-            print_frame[block_grid_2, thread_block](u_mem, pixeldata, cmap_mem, np.abs(u).max())
+            print_frame[block_grid_2, thread_block](u_new, pixeldata, cmap_mem, np.abs(u).max())
+
+            u_old = u_new
 
             queue.put(pixeldata.copy_to_host())
 
