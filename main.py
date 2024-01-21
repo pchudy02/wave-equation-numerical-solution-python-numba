@@ -175,6 +175,7 @@ def init_simulation():
 
 @cuda.jit(f'void(float64[:,:,:], float64[:,:], float64[:,:], float64[:])')
 def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
+    # zapisywać tylko jedną warstwę, tą do pochodnych x/y
     x, y = cuda.grid(2)
     # idx = cuda.threadIdx.x
     # idy = cuda.threadIdx.y
