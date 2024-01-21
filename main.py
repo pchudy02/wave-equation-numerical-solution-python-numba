@@ -63,8 +63,8 @@ def deriv_matrix_generator(window):
 
 h = 1  # spatial step width
 t = 1  # time step width
-dimx = 5000  # width of the simulation domain
-dimy = 5000  # height of the simulation domain
+dimx = 1000  # width of the simulation domain
+dimy = 1000  # height of the simulation domain
 deriv_window = 8
 widow_size = (1000, 1000)
 deriv_coffs_space = deriv_matrix_generator(deriv_window)
@@ -179,9 +179,18 @@ def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
     idx = cuda.threadIdx.x
     idy = cuda.threadIdx.y
 
-    # u_shared = cuda.shared.array(thread_block, dtype=np.float64)
+    u_shared = cuda.shared.array((thread_block[0] + deriv_window * 2, thread_block[1] + deriv_window * 2),
+                                 dtype=np.float64)
+    a_shared = cuda.shared.array((thread_block[0] + deriv_window * 2, thread_block[1] + deriv_window * 2),
+                                 dtype=np.float64)
 
     if x < u.shape[1] and y < u.shape[2]:
+        for i in range(thread_block[0] + deriv_window * 2, __step=32):
+            for j in range(thread_block[1] + deriv_window * 2, __step=32):
+                if 0 <= x - deriv_window + i <= u.shape[1] and 0 <= y - deriv_window + j <= u.shape[2]:
+                    u_shared[1, idx + i, idy + j] = u[0, x - deriv_window + i, y - deriv_window + j]
+                    u_shared[2, idx + i, idy + j] = u[1, x - deriv_window + i, y - deriv_window + j]
+                    a_shared[idx + i, idy + j] = alpha[x - deriv_window + i, y - deriv_window + j]
 
         # $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ #
         # $$$ Generacja następnej klatki $$$ #
