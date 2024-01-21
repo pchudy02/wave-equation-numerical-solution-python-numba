@@ -66,7 +66,7 @@ t = 1  # time step width
 dimx = 1000  # width of the simulation domain
 dimy = 1000  # height of the simulation domain
 deriv_window = 8
-widow_size = (1000, 1000)
+window_size = (1000, 1000)
 deriv_coffs_space = deriv_matrix_generator(deriv_window)
 deriv_coffs_time = np.array(savgol_coeffs(3, 2, deriv=2, use='dot'), dtype=np.float64)
 cmap = np.array([np.array(mpl.cm.inferno(i)[:3]) * 256 for i in np.linspace(0, 1, 256)], dtype=np.uint8)
@@ -176,21 +176,38 @@ def init_simulation():
 @cuda.jit(f'void(float64[:,:,:], float64[:,:], float64[:,:], float64[:])')
 def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
     x, y = cuda.grid(2)
-    idx = cuda.threadIdx.x
-    idy = cuda.threadIdx.y
+    # idx = cuda.threadIdx.x
+    # idy = cuda.threadIdx.y
 
-    u_shared = cuda.shared.array((thread_block[0] + deriv_window * 2, thread_block[1] + deriv_window * 2),
-                                 dtype=np.float64)
-    a_shared = cuda.shared.array((thread_block[0] + deriv_window * 2, thread_block[1] + deriv_window * 2),
-                                 dtype=np.float64)
+    # shape=(thread_block[0] + deriv_window * 2, thread_block[1] + deriv_window * 2)
+    # u_shared = cuda.shared.array(shape=(3, 8, 8), dtype=np.float64)
+    # a_shared = cuda.shared.array(shape=(8, 8), dtype=np.float64)
+
+    # deriv_coffs_space.shape
+    # d_s_shared = cuda.shared.array(shape=(17, 17), dtype=np.float64)
+    # d_t_shared = cuda.shared.array(shape=3, dtype=np.float64)
 
     if x < u.shape[1] and y < u.shape[2]:
-        for i in range(thread_block[0] + deriv_window * 2, __step=32):
-            for j in range(thread_block[1] + deriv_window * 2, __step=32):
-                if 0 <= x - deriv_window + i <= u.shape[1] and 0 <= y - deriv_window + j <= u.shape[2]:
-                    u_shared[1, idx + i, idy + j] = u[0, x - deriv_window + i, y - deriv_window + j]
-                    u_shared[2, idx + i, idy + j] = u[1, x - deriv_window + i, y - deriv_window + j]
-                    a_shared[idx + i, idy + j] = alpha[x - deriv_window + i, y - deriv_window + j]
+        # for i in range(0, thread_block[0] + deriv_window * 2, 32):
+        #     for j in range(0, thread_block[1] + deriv_window * 2, 32):
+        #         if 0 <= x - deriv_window + i <= u.shape[1] and 0 <= y - deriv_window + j <= u.shape[2]:
+        #             u_shared[1, idx + i, idy + j] = u[0, x - deriv_window + i, y - deriv_window + j]
+        #             u_shared[2, idx + i, idy + j] = u[1, x - deriv_window + i, y - deriv_window + j]
+        #             a_shared[idx + i, idy + j] = alpha[x - deriv_window + i, y - deriv_window + j]
+        #
+        # if idx < deriv_coffs_space.shape[0] and idy < deriv_coffs_space.shape[1]:
+        #     d_s_shared[idx, idy] = deriv_coffs_space[idx, idy]
+        #     if idx < deriv_coffs_time.shape[0] and idy == 0:
+        #         d_t_shared[idx] = deriv_coffs_time[idx]
+        #
+        # cuda.syncthreads()
+        #
+        # for i in range(0, thread_block[0] + deriv_window * 2, 32):
+        #     for j in range(0, thread_block[1] + deriv_window * 2, 32):
+        #         if 0 <= x - deriv_window + i <= u.shape[1] and 0 <= y - deriv_window + j <= u.shape[2]:
+        #             debug[0, x - deriv_window + i, y - deriv_window + j] = u_shared[1, idx + i, idy + j]
+        #             debug[1, x - deriv_window + i, y - deriv_window + j] = u_shared[2, idx + i, idy + j]
+        #             debug[2, x - deriv_window + i, y - deriv_window + j] = a_shared[idx + i, idy + j]
 
         # $$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ #
         # $$$ Generacja następnej klatki $$$ #
@@ -283,25 +300,33 @@ def generate_new_frame(u, alpha, deriv_coffs_space, deriv_coffs_time):
                 temp -= u[i, x, y] * deriv_coffs_time[i]
                 i += 1
 
-            if (10 ** (-310)) >= temp / deriv_coffs_time[0] >= -(10 ** (-310)):
+            cuda.syncthreads()
+
+            # u[2, x, y] = u[1, x, y]
+            # u[1, x, y] = u[0, x, y]
+
+            if (10 ** (-310)) >= temp / deriv_coffs_time[1] >= -(10 ** (-310)):
                 u[0, x, y] = 0
                 # u_shared[idx, idy] = 0
             else:
+
                 u[0, x, y] = (temp / deriv_coffs_time[0])
                 # u_shared[idx, idy] = (temp / deriv_coffs_time[0])
 
-        elif (x == 0 or x == u.shape[1] - 1) ^ (y == 0 or y == u.shape[2] - 1):
-            # k = alpha[x, y] * t / h
-            # k = (k - 1) / (k + 1)
-            # if x == 0:
-            #     u[0, x, y] = u[1, x + 1, y] + k * (u[0, x + 1, y] - u[1, x, y])
-            # elif x == u.shape[1] - 1:
-            #     u[0, x, y] = u[1, x - 1, y] + k * (u[0, x - 1, y] - u[1, x, y])
-            # elif y == 0:
-            #     u[0, x, y] = u[1, x, y + 1] + k * (u[0, x, y + 1] - u[1, x, y])
-            # elif y == u.shape[1] - 1:
-            #     u[0, x, y] = u[1, x, y - 1] + k * (u[0, x, y - 1] - u[1, x, y])
-            pass
+            cuda.syncthreads()
+
+        # elif (x == 0 or x == u.shape[1] - 1) ^ (y == 0 or y == u.shape[2] - 1):
+        #     # k = alpha[x, y] * t / h
+        #     # k = (k - 1) / (k + 1)
+        #     # if x == 0:
+        #     #     u[0, x, y] = u[1, x + 1, y] + k * (u[0, x + 1, y] - u[1, x, y])
+        #     # elif x == u.shape[1] - 1:
+        #     #     u[0, x, y] = u[1, x - 1, y] + k * (u[0, x - 1, y] - u[1, x, y])
+        #     # elif y == 0:
+        #     #     u[0, x, y] = u[1, x, y + 1] + k * (u[0, x, y + 1] - u[1, x, y])
+        #     # elif y == u.shape[1] - 1:
+        #     #     u[0, x, y] = u[1, x, y - 1] + k * (u[0, x, y - 1] - u[1, x, y])
+        #     pass
 
 
 def max_abs_value_from_array(arr):
@@ -437,7 +462,8 @@ def backend(pipe, queue):
     cmap_mem = cuda.to_device(cmap)
     deriv_coffs_spc_mem = cuda.to_device(deriv_coffs_space)
     deriv_coffs_tim_mem = cuda.to_device(deriv_coffs_time)
-    pixeldata = cuda.device_array((*widow_size, 3), dtype=np.uint8)
+    pixeldata = cuda.device_array((*window_size, 3), dtype=np.uint8)
+
 
     while True:
         if not queue.full():
@@ -459,7 +485,7 @@ def backend(pipe, queue):
 
 def main1():
     pygame.init()
-    display = pygame.display.set_mode(widow_size)
+    display = pygame.display.set_mode(window_size)
     pygame.display.set_caption("Solving the 2d Wave Equation")
 
     u, alpha = init_simulation()
@@ -481,7 +507,7 @@ def main1():
 
         u = cuda.to_device(u)
 
-        pixeldata = cuda.device_array((*widow_size, 3), dtype=np.uint8)
+        pixeldata = cuda.device_array((*window_size, 3), dtype=np.uint8)
 
         block_grid_1 = (int(np.ceil(u.shape[1] / thread_block[0])), int(np.ceil(u.shape[2] / thread_block[1])))
         block_grid_2 = (int(np.ceil(pixeldata.shape[0] / thread_block[0])),
@@ -500,16 +526,16 @@ def main1():
         pixeldata = pixeldata.copy_to_host()
 
         surf = pygame.surfarray.make_surface(pixeldata)
-        display.blit(pygame.transform.scale(surf, widow_size), (0, 0))
+        display.blit(pygame.transform.scale(surf, window_size), (0, 0))
         pygame.display.update()
 
 
 def main():
     pygame.init()
-    display = pygame.display.set_mode(widow_size)
+    display = pygame.display.set_mode(window_size)
     pygame.display.set_caption("Solving the 2d Wave Equation")
 
-    q = mp.Queue(5)
+    q = mp.Queue(500)
     p = mp.Pipe()
 
     backend_proc = mp.Process(target=backend, args=(p, q,))
@@ -525,7 +551,7 @@ def main():
 
         if not q.empty():
             surf = pygame.surfarray.make_surface(q.get())
-            display.blit(pygame.transform.scale(surf, widow_size), (0, 0))
+            display.blit(pygame.transform.scale(surf, window_size), (0, 0))
             pygame.display.update()
 
     pass
