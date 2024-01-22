@@ -7,6 +7,7 @@ from scipy.signal import savgol_coeffs
 from numba import cuda, float64, int32
 import matplotlib as mpl
 import multiprocessing as mp
+from PIL import Image
 
 
 def deriv_matrix_generator(window):
@@ -63,31 +64,34 @@ def deriv_matrix_generator(window):
 
 h = 1  # spatial step width
 t = 1  # time step width
-dimx = 1000  # width of the simulation domain
-dimy = 1000  # height of the simulation domain
 deriv_window = 8
-window_size = (1000, 1000)
 deriv_coffs_space = deriv_matrix_generator(deriv_window)
 deriv_coffs_time = np.array(savgol_coeffs(3, 2, deriv=2, use='dot'), dtype=np.float64)
 cmap = np.array([np.array(mpl.cm.inferno(i)[:3]) * 256 for i in np.linspace(0, 1, 256)], dtype=np.uint8)
-pass
 thread_block = (32, 32)
+window_size = (1000, 1000)
 
 
-def init_simulation():
-    u = np.zeros((3, dimx + 2, dimy + 2), dtype=np.float64)
-    u[0, u.shape[1] // 2:u.shape[1] // 2 + 2, u.shape[2] // 2:u.shape[2] // 2 + 2] = 1000
-    # u[0, 1:4, 1:4] = 100
-    # u[0, dimx // 2, :] = 1000
-    # u[0, 9, 9] = 10
-    # The three dimensional simulation grid u[time, dimx, dimy]
+def init_simulation(file_path=None):
+    if file_path is None:
+        dimx = 1000  # width of the simulation domain
+        dimy = 1000
 
+    else:
+        img = np.array(Image.open(file_path))
+        dimx = img.shape[0]
+        dimy = img.shape[1]
+
+    u = np.zeros((2, dimx + 2, dimy + 2), dtype=np.float64)
     c = 0.5  # The "original" wave propagation speed
-
-    alpha = np.zeros((u.shape[1], u.shape[2]), dtype=np.float64)
+    alpha = np.full((u.shape[1], u.shape[2]), ((c * t) / h) ** 2, dtype=np.float64)
     # wave propagation velocities of the entire simulation domain
 
-    alpha[:, :] = ((c * t) / h) ** 2  # will be set to a constant value of tau
+    if file_path is not None:
+        for x in range(dimx):
+            for y in range(dimy):
+                alpha[x + 1, y + 1] *= 1 - (img[x, y, 2] / 255)
+                u[0, x + 1, y + 1] = img[x, y, 0] / 255 * (10 ** 4)
 
     return u, alpha
 
@@ -188,7 +192,7 @@ def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time):
     # d_s_shared = cuda.shared.array(shape=(17, 17), dtype=np.float64)
     # d_t_shared = cuda.shared.array(shape=3, dtype=np.float64)
 
-    if x < u_in.shape[1] and y < u_in.shape[2]:
+    if x < u_in.shape[1] and y < u_in.shape[2] and alpha[x, y] != 0:
         #     for i in range(0, thread_block[0] + deriv_window * 2, 32):
         #         for j in range(0, thread_block[1] + deriv_window * 2, 32):
         #             if 0 <= x - deriv_window + i <= u_in.shape[1] and 0 <= y - deriv_window + j <= u_in.shape[2]:
@@ -324,52 +328,52 @@ def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time):
         #     pass
 
 
-def max_abs_value_from_array(arr):
-    sector_size = (2, 2)
-
-    a_mem = cuda.device_array((dimx + 2, dimy + 2), dtype=np.float64)
-    b_mem = cuda.device_array((int(np.ceil((dimx + 2) / sector_size[0])),
-                               int(np.ceil((dimy + 2) / sector_size[1]))),
-                              dtype=np.float64)
-
-    @cuda.jit()
-    def copy_array(u, a):
-        x, y = cuda.grid(2)
-
-        if x < u.shape[1] and y < u.shape[2]:
-            a[x, y] = u[0, x, y]
-
-        cuda.syncthreads()
-
-    @cuda.jit('void(float64[:,:], float64[:,:])')
-    def max_val_from_arr_gpu(a, b):
-        x, y = cuda.grid(2)
-
-        if x < b.shape[0] and y < b.shape[1]:
-            temp = 0
-
-            for i in range(2):
-                for j in range(2):
-                    if x * 2 + i < a.shape[0] and y * 2 + j < a.shape[1]:
-                        temp1 = a[x * 2 + i, y * 2 + j]
-                        if temp < temp1:
-                            temp = temp1
-
-            b[x, y] = temp
-
-        cuda.syncthreads()
-
-    copy_array[(int(np.ceil((dimx + 2) / 32)), int(np.ceil((dimy + 2) / 32))), (32, 32)](arr, a_mem)
-
-    block_grid = (int(np.ceil((dimx + 2) / sector_size[0] / 32)), int(np.ceil((dimy + 2) / sector_size[1] / 32)))
-
-    for k in range(int(np.ceil(max(np.log2(arr.shape[1]) / np.log2(sector_size[0]),
-                                   np.log2(arr.shape[2]) / np.log2(sector_size[1]))))):
-        max_val_from_arr_gpu[block_grid, (32, 32)](a_mem, b_mem)
-        a_mem, b_mem = b_mem, a_mem
-        block_grid = (int(np.ceil(block_grid[0] / sector_size[0])), int(np.ceil(block_grid[1] / sector_size[1])))
-
-    return (a_mem.copy_to_host())[0, 0]
+# def max_abs_value_from_array(arr):
+#     sector_size = (2, 2)
+#
+#     a_mem = cuda.device_array((dimx + 2, dimy + 2), dtype=np.float64)
+#     b_mem = cuda.device_array((int(np.ceil((dimx + 2) / sector_size[0])),
+#                                int(np.ceil((dimy + 2) / sector_size[1]))),
+#                               dtype=np.float64)
+#
+#     @cuda.jit()
+#     def copy_array(u, a):
+#         x, y = cuda.grid(2)
+#
+#         if x < u.shape[1] and y < u.shape[2]:
+#             a[x, y] = u[0, x, y]
+#
+#         cuda.syncthreads()
+#
+#     @cuda.jit('void(float64[:,:], float64[:,:])')
+#     def max_val_from_arr_gpu(a, b):
+#         x, y = cuda.grid(2)
+#
+#         if x < b.shape[0] and y < b.shape[1]:
+#             temp = 0
+#
+#             for i in range(2):
+#                 for j in range(2):
+#                     if x * 2 + i < a.shape[0] and y * 2 + j < a.shape[1]:
+#                         temp1 = a[x * 2 + i, y * 2 + j]
+#                         if temp < temp1:
+#                             temp = temp1
+#
+#             b[x, y] = temp
+#
+#         cuda.syncthreads()
+#
+#     copy_array[(int(np.ceil((dimx + 2) / 32)), int(np.ceil((dimy + 2) / 32))), (32, 32)](arr, a_mem)
+#
+#     block_grid = (int(np.ceil((dimx + 2) / sector_size[0] / 32)), int(np.ceil((dimy + 2) / sector_size[1] / 32)))
+#
+#     for k in range(int(np.ceil(max(np.log2(arr.shape[1]) / np.log2(sector_size[0]),
+#                                    np.log2(arr.shape[2]) / np.log2(sector_size[1]))))):
+#         max_val_from_arr_gpu[block_grid, (32, 32)](a_mem, b_mem)
+#         a_mem, b_mem = b_mem, a_mem
+#         block_grid = (int(np.ceil(block_grid[0] / sector_size[0])), int(np.ceil(block_grid[1] / sector_size[1])))
+#
+#     return (a_mem.copy_to_host())[0, 0]
 
 
 @cuda.jit('void(float64[:,:,:], uint8[:,:,:], uint8[:,:], float64)')
@@ -446,13 +450,13 @@ def use_color_map(u, scale, pixeldata, cmap):
             i += 1
 
 
-def place_raindrops(u, prob):
-    if (random.random() < prob) and True:
-        u[0, random.randrange(1, dimx + 1), random.randrange(1, dimx + 1)] = np.random.randint(10, 10000)
+# def place_raindrops(u, prob):
+#     if (random.random() < prob) and True:
+#         u[0, random.randrange(1, dimx + 1), random.randrange(1, dimx + 1)] = np.random.randint(10, 10000)
 
 
-def backend(pipe, queue):
-    u_old, alpha = init_simulation()
+def backend(queue):
+    u_old, alpha = init_simulation('test_1.png')
     alpha_mem = cuda.to_device(alpha)
     cmap_mem = cuda.to_device(cmap)
     deriv_coffs_spc_mem = cuda.to_device(deriv_coffs_space)
@@ -535,9 +539,8 @@ def main():
     pygame.display.set_caption("Solving the 2d Wave Equation")
 
     q = mp.Queue(500)
-    p = mp.Pipe()
 
-    backend_proc = mp.Process(target=backend, args=(p, q,))
+    backend_proc = mp.Process(target=backend, args=(q,))
 
     backend_proc.start()
 
