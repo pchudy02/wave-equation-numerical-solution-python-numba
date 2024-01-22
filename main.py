@@ -74,13 +74,13 @@ window_size = (1000, 1000)
 
 def init_simulation(file_path=None):
     if file_path is None:
-        dimx = 1000  # width of the simulation domain
         dimy = 1000
+        dimx = 1000  # width of the simulation domain
 
     else:
         img = np.array(Image.open(file_path))
-        dimx = img.shape[0]
-        dimy = img.shape[1]
+        dimy = img.shape[0]
+        dimx = img.shape[1]
 
     u = np.zeros((2, dimx + 2, dimy + 2), dtype=np.float64)
     c = 0.5  # The "original" wave propagation speed
@@ -90,8 +90,8 @@ def init_simulation(file_path=None):
     if file_path is not None:
         for x in range(dimx):
             for y in range(dimy):
-                alpha[x + 1, y + 1] *= 1 - (img[x, y, 2] / 255)
-                u[0, x + 1, y + 1] = img[x, y, 0] / 255 * (10 ** 4)
+                alpha[x + 1, y + 1] *= 1 - (img[y, x, 2] / 255)
+                u[0, x + 1, y + 1] = img[y, x, 0] / 255 * (10 ** 4)
 
     return u, alpha
 
