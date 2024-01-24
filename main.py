@@ -67,31 +67,66 @@ t = 1  # time step width
 deriv_window = 8
 deriv_coffs_space = deriv_matrix_generator(deriv_window)
 deriv_coffs_time = np.array(savgol_coeffs(3, 2, deriv=2, use='dot'), dtype=np.float64)
-cmap = np.array([np.array(mpl.cm.inferno(i)[:3]) * 256 for i in np.linspace(0, 1, 256)], dtype=np.uint8)
+cmap = np.array([np.array(mpl.cm.jet(i)[:3]) * 256 for i in np.linspace(0, 1, 256)], dtype=np.uint8)
 thread_block = (32, 32)
 window_size = (1000, 1000)
 
 
-def init_simulation(file_path=None):
+@cuda.jit('void(uint8[:, :, :], uint8[:, :, :], float64[:, :, :], uint8)')
+def init_simulation_gpu_help(img, u, alpha, aax):
+    x, y = cuda.grid(2)
+
+    if x < img.shape[1] and y < img.shape[0]:
+        for ix in range((x + 1) * aax, (x + 1) * (aax + 1)):
+            for iy in range((y + 1) * aax, (y + 1) * (aax + 1)):
+
+                if img[y, x, 1] == 0:
+                    alpha[0, ix, iy] *= 1 - (img[y, x, 2] / 255)
+                    u[0, ix, iy] = img[y, x, 0]
+
+                else:
+                    alpha[0, ix, iy] = img[y, x, 0]
+                    alpha[1, ix, iy] = img[y, x, 1] / 255
+                    alpha[2, ix, iy] = img[y, x, 2] / 256
+
+
+def init_simulation(file_path=None, aax=1):
     if file_path is None:
         dimy = 1000
         dimx = 1000  # width of the simulation domain
 
     else:
         img = np.array(Image.open(file_path))
-        dimy = img.shape[0]
-        dimx = img.shape[1]
+        dimy = img.shape[0] * aax
+        dimx = img.shape[1] * aax
 
     u = np.zeros((2, dimx + 2, dimy + 2), dtype=np.float64)
     c = 0.5  # The "original" wave propagation speed
-    alpha = np.full((u.shape[1], u.shape[2]), ((c * t) / h) ** 2, dtype=np.float64)
+    alpha = np.full((3, u.shape[1], u.shape[2]), ((c * t) / h) ** 2, dtype=np.float64)
     # wave propagation velocities of the entire simulation domain
 
     if file_path is not None:
+        pass
         for x in range(dimx):
             for y in range(dimy):
-                alpha[x + 1, y + 1] *= 1 - (img[y, x, 2] / 255)
-                u[0, x + 1, y + 1] = img[y, x, 0] / 255 * (10 ** 4)
+                if img[y, x, 1] == 0:
+                    alpha[0, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] *= (
+                            1 - (img[y, x, 2] / 255))
+                    u[0, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] = img[y, x, 0]
+
+                else:
+                    alpha[0, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] = img[y, x, 0]
+                    alpha[1, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] = img[y, x, 1] / 255
+                    alpha[2, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] = img[y, x, 2] / 128
+
+        # u = cuda.to_device(u)
+        # alpha = cuda.to_device(alpha)
+        # img = cuda.to_device(img)
+        # init_simulation_gpu_help[(int(np.ceil(img.shape[1] / thread_block[0])),
+        #                           int(np.ceil(img.shape[0] / thread_block[1]))), thread_block](img, u, alpha, aax)
+        #
+        # u = u.copy_to_host()
+        # alpha = alpha.copy_to_host()
 
     return u, alpha
 
@@ -177,8 +212,8 @@ def init_simulation(file_path=None):
 #         #     pass
 
 
-@cuda.jit(f'void(float64[:,:,:], float64[:,:,:], float64[:,:], float64[:,:], float64[:])')
-def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time):
+@cuda.jit(f'void(float64[:,:,:], float64[:,:,:], float64[:,:,:], float64[:,:], float64[:], int64)')
+def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time, time):
     # zapisywać tylko jedną warstwę, tą do pochodnych x/y
     x, y = cuda.grid(2)
     # idx = cuda.threadIdx.x
@@ -192,8 +227,9 @@ def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time):
     # d_s_shared = cuda.shared.array(shape=(17, 17), dtype=np.float64)
     # d_t_shared = cuda.shared.array(shape=3, dtype=np.float64)
 
-    if x < u_in.shape[1] and y < u_in.shape[2] and alpha[x, y] != 0:
-        #     for i in range(0, thread_block[0] + deriv_window * 2, 32):
+    if x < u_in.shape[1] and y < u_in.shape[2]:
+
+        # for i in range(0, thread_block[0] + deriv_window * 2, 32):
         #         for j in range(0, thread_block[1] + deriv_window * 2, 32):
         #             if 0 <= x - deriv_window + i <= u_in.shape[1] and 0 <= y - deriv_window + j <= u_in.shape[2]:
         #                 u_shared[idx + i, idy + j] = u_in[0, x - deriv_window + i, y - deriv_window + j]
@@ -226,93 +262,98 @@ def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time):
             # x_plus_y_minus = True
             # x_minus_y_plus = True
             # x_minus_y_minus = True
+            if alpha[1, x, y] != 0:
 
-            temp = 0
-            for i in range(deriv_window + 1):
+                temp = 0
+                for i in range(deriv_window + 1):
 
-                # Pion - poziom #
+                    # Pion - poziom #
 
-                # if u.shape[1] - 1 > x + i > 0 and x_plus:
-                #     if alpha[x + i, y] == 0:
-                #         x_plus = False
-                #     else:
-                #         temp += u[1, x + i, y] * deriv_coffs_space[i]
-                #
-                # if u.shape[1] - 1 > x - i > 0 != i and x_minus:
-                #     if alpha[x - i, y] == 0:
-                #         x_minus = False
-                #     else:
-                #         temp += u[1, x - i, y] * deriv_coffs_space[i]
-                #
-                # if u.shape[1] - 1 > y + i > 0 and y_plus:
-                #     if alpha[x, y + i] == 0:
-                #         y_plus = False
-                #     else:
-                #         temp += u[1, x, y + i] * deriv_coffs_space[i]
-                #
-                # if u.shape[1] - 1 > y - i > 0 != i and y_minus:
-                #     if alpha[x, y - i] == 0:
-                #         y_minus = False
-                #     else:
-                #         temp += u[1, x, y - i] * deriv_coffs_space[i]
-                #
-                # # Ukosy #
-                #
-                # if u.shape[1] - 1 > x + i > 0 and u.shape[2] - 1 > y + i > 0 and x_plus_y_plus:
-                #     if alpha[x + i, y + i] == 0:
-                #         x_plus = False
-                #     else:
-                #         temp += u[1, x + i, y + i] * deriv_coffs_space[i]
-                #
-                # if u.shape[1] - 1 > x - i > 0 != i and u.shape[2] - 1 > y - i > 0 and x_minus_y_minus:
-                #     if alpha[x - i, y - i] == 0:
-                #         x_plus = False
-                #     else:
-                #         temp += u[1, x - i, y - i] * deriv_coffs_space[i]
-                #
-                # if u.shape[1] - 1 > x - i > 0 and u.shape[2] - 1 > y + i > 0 and x_minus_y_plus:
-                #     if alpha[x - i, y + i] == 0:
-                #         x_plus = False
-                #     else:
-                #         temp += u[1, x - i, y + i] * deriv_coffs_space[i]
-                #
-                # if u.shape[1] - 1 > x + i > 0 != i and u.shape[2] - 1 > y - i > 0 and x_plus_y_minus:
-                #     if alpha[x + i, y - i] == 0:
-                #         x_plus = False
-                #     else:
-                #         temp += u[1, x + i, y - i] * deriv_coffs_space[i]
+                    # if u.shape[1] - 1 > x + i > 0 and x_plus:
+                    #     if alpha[x + i, y] == 0:
+                    #         x_plus = False
+                    #     else:
+                    #         temp += u[1, x + i, y] * deriv_coffs_space[i]
+                    #
+                    # if u.shape[1] - 1 > x - i > 0 != i and x_minus:
+                    #     if alpha[x - i, y] == 0:
+                    #         x_minus = False
+                    #     else:
+                    #         temp += u[1, x - i, y] * deriv_coffs_space[i]
+                    #
+                    # if u.shape[1] - 1 > y + i > 0 and y_plus:
+                    #     if alpha[x, y + i] == 0:
+                    #         y_plus = False
+                    #     else:
+                    #         temp += u[1, x, y + i] * deriv_coffs_space[i]
+                    #
+                    # if u.shape[1] - 1 > y - i > 0 != i and y_minus:
+                    #     if alpha[x, y - i] == 0:
+                    #         y_minus = False
+                    #     else:
+                    #         temp += u[1, x, y - i] * deriv_coffs_space[i]
+                    #
+                    # # Ukosy #
+                    #
+                    # if u.shape[1] - 1 > x + i > 0 and u.shape[2] - 1 > y + i > 0 and x_plus_y_plus:
+                    #     if alpha[x + i, y + i] == 0:
+                    #         x_plus = False
+                    #     else:
+                    #         temp += u[1, x + i, y + i] * deriv_coffs_space[i]
+                    #
+                    # if u.shape[1] - 1 > x - i > 0 != i and u.shape[2] - 1 > y - i > 0 and x_minus_y_minus:
+                    #     if alpha[x - i, y - i] == 0:
+                    #         x_plus = False
+                    #     else:
+                    #         temp += u[1, x - i, y - i] * deriv_coffs_space[i]
+                    #
+                    # if u.shape[1] - 1 > x - i > 0 and u.shape[2] - 1 > y + i > 0 and x_minus_y_plus:
+                    #     if alpha[x - i, y + i] == 0:
+                    #         x_plus = False
+                    #     else:
+                    #         temp += u[1, x - i, y + i] * deriv_coffs_space[i]
+                    #
+                    # if u.shape[1] - 1 > x + i > 0 != i and u.shape[2] - 1 > y - i > 0 and x_plus_y_minus:
+                    #     if alpha[x + i, y - i] == 0:
+                    #         x_plus = False
+                    #     else:
+                    #         temp += u[1, x + i, y - i] * deriv_coffs_space[i]
 
-                # temp *= (alpha[x, y] ** 2)
+                    # temp *= (alpha[x, y] ** 2)
 
-                # Pochodne w 2d (3d)
-                for j in range(deriv_window + 1):
-                    if u_in.shape[1] - 1 > x + i > 0 and u_in.shape[2] - 1 > y + j > 0:
-                        temp += u_in[0, x + i, y + j] * deriv_coffs_space[i, j] * alpha[x + i, y + j]
+                    # Pochodne w 2d (3d)
+                    for j in range(deriv_window + 1):
+                        if u_in.shape[1] - 1 > x + i > 0 and u_in.shape[2] - 1 > y + j > 0:
+                            temp += u_in[0, x + i, y + j] * deriv_coffs_space[i, j] * alpha[0, x + i, y + j]
 
-                    if u_in.shape[1] - 1 > x + i > 0 and u_in.shape[2] - 1 > y - j > 0 < j and not (i == 0 and j == 0):
-                        temp += u_in[0, x + i, y - j] * deriv_coffs_space[i, j] * alpha[x + i, y - j]
+                        if u_in.shape[1] - 1 > x + i > 0 and u_in.shape[2] - 1 > y - j > 0 < j and not (
+                                i == 0 and j == 0):
+                            temp += u_in[0, x + i, y - j] * deriv_coffs_space[i, j] * alpha[0, x + i, y - j]
 
-                    if u_in.shape[1] - 1 > x - i > 0 < i and u_in.shape[2] - 1 > y + j > 0 and not (i == 0 and j == 0):
-                        temp += u_in[0, x - i, y + j] * deriv_coffs_space[i, j] * alpha[x - i, y + j]
+                        if u_in.shape[1] - 1 > x - i > 0 < i and u_in.shape[2] - 1 > y + j > 0 and not (
+                                i == 0 and j == 0):
+                            temp += u_in[0, x - i, y + j] * deriv_coffs_space[i, j] * alpha[0, x - i, y + j]
 
-                    if u_in.shape[1] - 1 > x - i > 0 < i and u_in.shape[2] - 1 > y - j > 0 < j and not (
-                            i == 0 and j == 0):
-                        temp += u_in[0, x - i, y - j] * deriv_coffs_space[i, j] * alpha[x - i, y - j]
+                        if u_in.shape[1] - 1 > x - i > 0 < i and u_in.shape[2] - 1 > y - j > 0 < j and not (
+                                i == 0 and j == 0):
+                            temp += u_in[0, x - i, y - j] * deriv_coffs_space[i, j] * alpha[0, x - i, y - j]
 
-            temp -= u_in[1, x, y] * deriv_coffs_time[2]
-            temp -= u_in[0, x, y] * deriv_coffs_time[1]
+                temp -= u_in[1, x, y] * deriv_coffs_time[2]
+                temp -= u_in[0, x, y] * deriv_coffs_time[1]
 
-            # temp -= u_shared[idx + deriv_window, idy + deriv_window] * deriv_coffs_time[1]
+                # temp -= u_shared[idx + deriv_window, idy + deriv_window] * deriv_coffs_time[1]
+
+                if (10 ** (-310)) >= temp / deriv_coffs_time[0] >= -(10 ** (-310)):
+                    u_out[0, x, y] = 0
+                    # u_shared[idx, idy] = 0
+                else:
+                    # u_shared[idx, idy] = (temp / deriv_coffs_time[0])
+                    u_out[0, x, y] = (temp / deriv_coffs_time[0])
+
+            else:
+                u_out[0, x, y] = np.cos(np.pi * (time * alpha[1, x, y] - alpha[2, x, y])) * alpha[0, x, y]
 
             u_out[1, x, y] = u_in[0, x, y]
-
-            if (10 ** (-310)) >= temp / deriv_coffs_time[0] >= -(10 ** (-310)):
-                u_out[0, x, y] = 0
-                # u_shared[idx, idy] = 0
-            else:
-
-                u_out[0, x, y] = (temp / deriv_coffs_time[0])
-                # u_shared[idx, idy] = (temp / deriv_coffs_time[0])
 
         # elif (x == 0 or x == u.shape[1] - 1) ^ (y == 0 or y == u.shape[2] - 1):
         #     # k = alpha[x, y] * t / h
@@ -456,12 +497,13 @@ def use_color_map(u, scale, pixeldata, cmap):
 
 
 def backend(queue):
-    u_old, alpha = init_simulation('test_1.png')
+    u_old, alpha = init_simulation('test_freq_1.png')
     alpha_mem = cuda.to_device(alpha)
     cmap_mem = cuda.to_device(cmap)
     deriv_coffs_spc_mem = cuda.to_device(deriv_coffs_space)
     deriv_coffs_tim_mem = cuda.to_device(deriv_coffs_time)
     pixeldata = cuda.device_array((*window_size, 3), dtype=np.uint8)
+    frame = 0
 
     u_old = cuda.to_device(u_old)
 
@@ -475,13 +517,14 @@ def backend(queue):
                             int(np.ceil(pixeldata.shape[1] / thread_block[1])))
 
             generate_new_frame[block_grid_1, thread_block](u_old, u_new, alpha_mem, deriv_coffs_spc_mem,
-                                                           deriv_coffs_tim_mem)
+                                                           deriv_coffs_tim_mem, 0)
 
             u = u_new.copy_to_host()
 
             print_frame[block_grid_2, thread_block](u_new, pixeldata, cmap_mem, np.abs(u).max())
 
             u_old = u_new
+            frame += 1
 
             queue.put(pixeldata.copy_to_host())
 
