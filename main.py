@@ -67,7 +67,7 @@ t = 1  # time step width
 deriv_window = 8
 deriv_coffs_space = deriv_matrix_generator(deriv_window)
 deriv_coffs_time = np.array(savgol_coeffs(3, 2, deriv=2, use='dot'), dtype=np.float64)
-cmap = np.array([np.array(mpl.cm.jet(i)[:3]) * 256 for i in np.linspace(0, 1, 256)], dtype=np.uint8)
+cmap = np.array([np.array(mpl.cm.inferno(i)[:3]) * 256 for i in np.linspace(0, 1, 256)], dtype=np.uint8)
 thread_block = (32, 32)
 window_size = (1000, 1000)
 
@@ -115,9 +115,9 @@ def init_simulation(file_path=None):
                     u[0, (x + 1), (y + 1)] = img[y, x, 0]
 
                 else:
-                    alpha[0, (x + 1), (y + 1)] = img[y, x, 0]
-                    alpha[1, (x + 1), (y + 1)] = img[y, x, 1] / 255
-                    alpha[2, (x + 1), (y + 1)] = img[y, x, 2] / 128
+                    alpha[0, (x + 1), (y + 1)] = img[y, x, 0]  # amplitude
+                    alpha[1, (x + 1), (y + 1)] = img[y, x, 1] / 255  # frequency
+                    alpha[2, (x + 1), (y + 1)] = img[y, x, 2] / 128  # phase
 
         # u = cuda.to_device(u)
         # alpha = cuda.to_device(alpha)
@@ -227,6 +227,8 @@ def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time, 
     # d_s_shared = cuda.shared.array(shape=(17, 17), dtype=np.float64)
     # d_t_shared = cuda.shared.array(shape=3, dtype=np.float64)
 
+    # for x in range(50):
+    #     for y in range(50):
     if x < u_in.shape[1] and y < u_in.shape[2]:
 
         # for i in range(0, thread_block[0] + deriv_window * 2, 32):
@@ -262,7 +264,7 @@ def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time, 
             # x_plus_y_minus = True
             # x_minus_y_plus = True
             # x_minus_y_minus = True
-            if alpha[1, x, y] != 0:
+            if alpha[1, x, y] == 0 and alpha[0, x, y] != 0:
 
                 temp = 0
                 for i in range(deriv_window + 1):
@@ -350,23 +352,23 @@ def generate_new_frame(u_in, u_out, alpha, deriv_coffs_space, deriv_coffs_time, 
                     # u_shared[idx, idy] = (temp / deriv_coffs_time[0])
                     u_out[0, x, y] = (temp / deriv_coffs_time[0])
 
-            else:
+            elif alpha[1, x, y] != 0:
                 u_out[0, x, y] = np.cos(np.pi * (time * alpha[1, x, y] - alpha[2, x, y])) * alpha[0, x, y]
 
             u_out[1, x, y] = u_in[0, x, y]
 
-        # elif (x == 0 or x == u.shape[1] - 1) ^ (y == 0 or y == u.shape[2] - 1):
-        #     # k = alpha[x, y] * t / h
-        #     # k = (k - 1) / (k + 1)
-        #     # if x == 0:
-        #     #     u[0, x, y] = u[1, x + 1, y] + k * (u[0, x + 1, y] - u[1, x, y])
-        #     # elif x == u.shape[1] - 1:
-        #     #     u[0, x, y] = u[1, x - 1, y] + k * (u[0, x - 1, y] - u[1, x, y])
-        #     # elif y == 0:
-        #     #     u[0, x, y] = u[1, x, y + 1] + k * (u[0, x, y + 1] - u[1, x, y])
-        #     # elif y == u.shape[1] - 1:
-        #     #     u[0, x, y] = u[1, x, y - 1] + k * (u[0, x, y - 1] - u[1, x, y])
-        #     pass
+            # elif (x == 0 or x == u.shape[1] - 1) ^ (y == 0 or y == u.shape[2] - 1):
+            #     # k = alpha[x, y] * t / h
+            #     # k = (k - 1) / (k + 1)
+            #     # if x == 0:
+            #     #     u[0, x, y] = u[1, x + 1, y] + k * (u[0, x + 1, y] - u[1, x, y])
+            #     # elif x == u.shape[1] - 1:
+            #     #     u[0, x, y] = u[1, x - 1, y] + k * (u[0, x - 1, y] - u[1, x, y])
+            #     # elif y == 0:
+            #     #     u[0, x, y] = u[1, x, y + 1] + k * (u[0, x, y + 1] - u[1, x, y])
+            #     # elif y == u.shape[1] - 1:
+            #     #     u[0, x, y] = u[1, x, y - 1] + k * (u[0, x, y - 1] - u[1, x, y])
+            #     pass
 
 
 # def max_abs_value_from_array(arr):
@@ -497,7 +499,7 @@ def use_color_map(u, scale, pixeldata, cmap):
 
 
 def backend(queue):
-    u_old, alpha = init_simulation('test_1.png')
+    u_old, alpha = init_simulation('test_freq_1.png')
     alpha_mem = cuda.to_device(alpha)
     cmap_mem = cuda.to_device(cmap)
     deriv_coffs_spc_mem = cuda.to_device(deriv_coffs_space)
@@ -505,7 +507,7 @@ def backend(queue):
     pixeldata = cuda.device_array((*window_size, 3), dtype=np.uint8)
     frame = 0
 
-    u_old = cuda.to_device(u_old)
+    # u_old = cuda.to_device(u_old)
 
     while True:
         if not queue.full():
@@ -517,7 +519,9 @@ def backend(queue):
                             int(np.ceil(pixeldata.shape[1] / thread_block[1])))
 
             generate_new_frame[block_grid_1, thread_block](u_old, u_new, alpha_mem, deriv_coffs_spc_mem,
-                                                           deriv_coffs_tim_mem, 0)
+                                                           deriv_coffs_tim_mem, frame)
+
+            # generate_new_frame(u_old, u_new, alpha, deriv_coffs_space, deriv_coffs_time, 0)
 
             u = u_new.copy_to_host()
 
@@ -591,7 +595,7 @@ def main():
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 pygame.quit()
-                backend_proc.join()
+                backend_proc.terminate()
                 return
 
         if not q.empty():
