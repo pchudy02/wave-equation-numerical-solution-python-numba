@@ -90,19 +90,20 @@ def init_simulation_gpu_help(img, u, alpha, aax):
                     alpha[2, ix, iy] = img[y, x, 2] / 256
 
 
-def init_simulation(file_path=None, aax=1):
+def init_simulation(file_path=None):
     if file_path is None:
         dimy = 1000
         dimx = 1000  # width of the simulation domain
 
     else:
         img = np.array(Image.open(file_path))
-        dimy = img.shape[0] * aax
-        dimx = img.shape[1] * aax
+        dimy = img.shape[0]
+        dimx = img.shape[1]
 
     u = np.zeros((2, dimx + 2, dimy + 2), dtype=np.float64)
     c = 0.5  # The "original" wave propagation speed
-    alpha = np.full((3, u.shape[1], u.shape[2]), ((c * t) / h) ** 2, dtype=np.float64)
+    alpha = np.zeros((3, u.shape[1], u.shape[2]), dtype=np.float64)
+    alpha[0, :, :] = ((c * t) / h) ** 2
     # wave propagation velocities of the entire simulation domain
 
     if file_path is not None:
@@ -110,14 +111,13 @@ def init_simulation(file_path=None, aax=1):
         for x in range(dimx):
             for y in range(dimy):
                 if img[y, x, 1] == 0:
-                    alpha[0, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] *= (
-                            1 - (img[y, x, 2] / 255))
-                    u[0, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] = img[y, x, 0]
+                    alpha[0, (x + 1), (y + 1)] *= (1 - (img[y, x, 2] / 255))
+                    u[0, (x + 1), (y + 1)] = img[y, x, 0]
 
                 else:
-                    alpha[0, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] = img[y, x, 0]
-                    alpha[1, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] = img[y, x, 1] / 255
-                    alpha[2, (x + 1) * aax:(x + 1) * (aax + 1), (y + 1) * aax:(y + 1) * (aax + 1)] = img[y, x, 2] / 128
+                    alpha[0, (x + 1), (y + 1)] = img[y, x, 0]
+                    alpha[1, (x + 1), (y + 1)] = img[y, x, 1] / 255
+                    alpha[2, (x + 1), (y + 1)] = img[y, x, 2] / 128
 
         # u = cuda.to_device(u)
         # alpha = cuda.to_device(alpha)
@@ -497,7 +497,7 @@ def use_color_map(u, scale, pixeldata, cmap):
 
 
 def backend(queue):
-    u_old, alpha = init_simulation('test_freq_1.png')
+    u_old, alpha = init_simulation('test_1.png')
     alpha_mem = cuda.to_device(alpha)
     cmap_mem = cuda.to_device(cmap)
     deriv_coffs_spc_mem = cuda.to_device(deriv_coffs_space)
